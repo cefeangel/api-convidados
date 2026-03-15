@@ -79,19 +79,19 @@ jobs:
 
       - name: Inicializar CodeQL
         if: steps.check-source.outputs.has_code == 'true'
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           queries: +security-and-quality
 
       - name: Build Automático
         if: steps.check-source.outputs.has_code == 'true'
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@v4
 
       - name: Executar Análise CodeQL
         if: steps.check-source.outputs.has_code == 'true'
         continue-on-error: true
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
 
