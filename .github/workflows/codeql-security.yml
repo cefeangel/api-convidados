@@ -38,6 +38,10 @@ jobs:
             LANGS=("javascript")
           fi
 
+          # Kotlin usa o analisador Java no CodeQL
+          find . -name "*.kt" -not -path "*/.github/*" -not -path "*/build/*" | grep -q . && \
+            [[ ! " ${LANGS[*]} " =~ " java " ]] && LANGS+=("java")
+
           LANGS_JSON=$(printf '%s\n' "${LANGS[@]}" | jq -R . | jq -s -c .)
           echo "languages=$LANGS_JSON" >> $GITHUB_OUTPUT
           echo "Linguagens detectadas: ${LANGS[*]}"
@@ -68,6 +72,7 @@ jobs:
             find . -name "*.go" | grep -q . && HAS_CODE="true"
           elif [ "$LANG" = "java" ]; then
             find . -name "*.java" | grep -q . && HAS_CODE="true"
+            find . -name "*.kt" -not -path "*/build/*" | grep -q . && HAS_CODE="true"
           fi
           echo "has_code=$HAS_CODE" >> $GITHUB_OUTPUT
           echo "Linguagem: $LANG | Código encontrado: $HAS_CODE"

@@ -92,8 +92,9 @@ jobs:
       - name: Detectar Linguagens do Projeto
         id: detect-lang
         run: |
-          HAS_JS=false;  HAS_PHP=false; HAS_PY=false
-          HAS_GO=false;  HAS_HTML=false; HAS_CSS=false
+          HAS_JS=false;  HAS_PHP=false;   HAS_PY=false
+          HAS_GO=false;  HAS_HTML=false;  HAS_CSS=false
+          HAS_KT=false;  HAS_SWIFT=false
           [ -f "package.json" ] && HAS_JS=true
           find . -not -path "*/node_modules/*" -not -path "*/.github/*" -not -path "*/vendor/*" \
             -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" 2>/dev/null | grep -q . && HAS_JS=true
@@ -105,21 +106,29 @@ jobs:
             -name "*.css" -o -name "*.scss" -o -name "*.sass" 2>/dev/null | grep -q . && HAS_CSS=true
           { [ -f "requirements.txt" ] || [ -f "pyproject.toml" ]; } && HAS_PY=true
           [ -f "go.mod" ] && HAS_GO=true
-          echo "has_js=$HAS_JS"   >> $GITHUB_OUTPUT
-          echo "has_php=$HAS_PHP" >> $GITHUB_OUTPUT
-          echo "has_html=$HAS_HTML" >> $GITHUB_OUTPUT
-          echo "has_css=$HAS_CSS"  >> $GITHUB_OUTPUT
-          echo "has_py=$HAS_PY"   >> $GITHUB_OUTPUT
-          echo "has_go=$HAS_GO"   >> $GITHUB_OUTPUT
+          find . -not -path "*/.github/*" -not -path "*/build/*" \
+            -name "*.kt" -o -name "*.kts" 2>/dev/null | grep -q . && HAS_KT=true
+          find . -not -path "*/.github/*" -not -path "*/build/*" \
+            -name "*.swift" 2>/dev/null | grep -q . && HAS_SWIFT=true
+          echo "has_js=$HAS_JS"       >> $GITHUB_OUTPUT
+          echo "has_php=$HAS_PHP"     >> $GITHUB_OUTPUT
+          echo "has_html=$HAS_HTML"   >> $GITHUB_OUTPUT
+          echo "has_css=$HAS_CSS"     >> $GITHUB_OUTPUT
+          echo "has_py=$HAS_PY"       >> $GITHUB_OUTPUT
+          echo "has_go=$HAS_GO"       >> $GITHUB_OUTPUT
+          echo "has_kt=$HAS_KT"       >> $GITHUB_OUTPUT
+          echo "has_swift=$HAS_SWIFT" >> $GITHUB_OUTPUT
           echo "### 🔎 Linguagens detectadas" >> $GITHUB_STEP_SUMMARY
           echo "| Linguagem | Presente |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|----------|" >> $GITHUB_STEP_SUMMARY
-          echo "| JavaScript / TypeScript | $HAS_JS |" >> $GITHUB_STEP_SUMMARY
-          echo "| HTML | $HAS_HTML |" >> $GITHUB_STEP_SUMMARY
-          echo "| CSS / SCSS | $HAS_CSS |" >> $GITHUB_STEP_SUMMARY
-          echo "| PHP | $HAS_PHP |" >> $GITHUB_STEP_SUMMARY
-          echo "| Python | $HAS_PY |" >> $GITHUB_STEP_SUMMARY
-          echo "| Go | $HAS_GO |" >> $GITHUB_STEP_SUMMARY
+          echo "| JavaScript / TypeScript | $HAS_JS |"   >> $GITHUB_STEP_SUMMARY
+          echo "| HTML | $HAS_HTML |"                    >> $GITHUB_STEP_SUMMARY
+          echo "| CSS / SCSS | $HAS_CSS |"               >> $GITHUB_STEP_SUMMARY
+          echo "| PHP | $HAS_PHP |"                      >> $GITHUB_STEP_SUMMARY
+          echo "| Python | $HAS_PY |"                    >> $GITHUB_STEP_SUMMARY
+          echo "| Go | $HAS_GO |"                        >> $GITHUB_STEP_SUMMARY
+          echo "| Kotlin (Android) | $HAS_KT |"          >> $GITHUB_STEP_SUMMARY
+          echo "| Swift (iOS) | $HAS_SWIFT |"            >> $GITHUB_STEP_SUMMARY
 
       # ── JavaScript / TypeScript / HTML / CSS ──
       - name: Setup Node.js
@@ -221,6 +230,43 @@ jobs:
         run: |
           echo "### 🐹 Go Vet" >> $GITHUB_STEP_SUMMARY
           go vet ./... 2>&1 >> $GITHUB_STEP_SUMMARY || true
+
+
+      # ── Kotlin (Android) ─────────────────────
+      - name: Setup Java para Kotlin
+        if: steps.detect-lang.outputs.has_kt == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: ktlint — Kotlin
+        if: steps.detect-lang.outputs.has_kt == 'true'
+        continue-on-error: true
+        run: |
+          echo "### 🤖 ktlint — Kotlin / Android" >> $GITHUB_STEP_SUMMARY
+          curl -sSLO https://github.com/pinterest/ktlint/releases/latest/download/ktlint
+          chmod +x ktlint
+          ./ktlint --relative --reporter=plain "**/*.kt" "**/*.kts" 2>&1 | \
+            grep -v "^$" | head -40 >> $GITHUB_STEP_SUMMARY || true
+          rm -f ktlint
+
+      # ── Swift (iOS) ───────────────────────────
+      - name: SwiftLint — Swift / iOS
+        if: steps.detect-lang.outputs.has_swift == 'true'
+        continue-on-error: true
+        runs-on: macos-latest
+        run: |
+          echo "### 🍎 SwiftLint — Swift / iOS" >> $GITHUB_STEP_SUMMARY
+          if ! command -v swiftlint &>/dev/null; then
+            brew install swiftlint 2>/dev/null || true
+          fi
+          if command -v swiftlint &>/dev/null; then
+            swiftlint lint --reporter github-actions-logging 2>&1 | head -40 >> $GITHUB_STEP_SUMMARY || true
+          else
+            echo "⚠️ SwiftLint não pôde ser instalado neste runner." >> $GITHUB_STEP_SUMMARY
+            echo "Para análise local instale com: brew install swiftlint" >> $GITHUB_STEP_SUMMARY
+          fi
 
       # ── Checagens Genéricas ──────────────────
       - name: Verificar Arquivos de Configuração Sensíveis
