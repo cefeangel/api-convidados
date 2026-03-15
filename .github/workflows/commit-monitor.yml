@@ -306,37 +306,56 @@ jobs:
           COMMIT_MSG: ${{ needs.commit-metadata.outputs.commit_message }}
           FILES_CHANGED: ${{ needs.commit-metadata.outputs.files_changed }}
         run: |
-          DIFF_CONTENT=$(git diff HEAD~1 HEAD 2>/dev/null | head -150 || git show HEAD | head -150)
+          # Python monta e envia o JSON com segurança (evita quebra por caracteres especiais no diff)
+          python3 - <<'PYEOF' > /tmp/ai_summary.txt
+import os, json, urllib.request, subprocess
 
-          RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"model\": \"gpt-4o\",
-              \"max_tokens\": 600,
-              \"messages\": [
-                {
-                  \"role\": \"system\",
-                  \"content\": \"Você é um assistente técnico especializado em revisão de código. Responda sempre em português brasileiro de forma objetiva e concisa.\"
-                },
-                {
-                  \"role\": \"user\",
-                  \"content\": \"Analise este commit do GitHub e gere um resumo técnico em português brasileiro. Seja objetivo e direto.\\n\\nAutor: $AUTHOR\\nMensagem: $COMMIT_MSG\\nArquivos alterados: $FILES_CHANGED\\n\\nDiff (primeiras linhas):\\n\`\`\`\\n$DIFF_CONTENT\\n\`\`\`\\n\\nForneça:\\n1. **Propósito**: O que este commit faz (1-2 frases)\\n2. **Impacto**: Quais partes do sistema são afetadas\\n3. **Qualidade**: Observações sobre boas práticas\\n4. **Riscos**: Possíveis problemas introduzidos\\n\\nSeja conciso e técnico.\"
-                }
-              ]
-            }")
+api_key    = os.environ.get("OPENAI_API_KEY", "")
+author     = os.environ.get("AUTHOR", "")
+commit_msg = os.environ.get("COMMIT_MSG", "")
+files      = os.environ.get("FILES_CHANGED", "")
 
-          SUMMARY=$(echo "$RESPONSE" | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          if 'choices' in data and len(data['choices']) > 0:
-              print(data['choices'][0]['message']['content'])
-          else:
-              print('Erro ao gerar resumo: ' + str(data.get('error', {}).get('message', 'Desconhecido')))
-          ")
+diff = subprocess.run(["git","diff","HEAD~1","HEAD"], capture_output=True, text=True).stdout[:3000]
+if not diff.strip():
+    diff = subprocess.run(["git","show","HEAD"], capture_output=True, text=True).stdout[:3000]
+
+prompt = (
+    "Analise este commit do GitHub e gere um resumo tecnico em portugues brasileiro.\n\n"
+    f"Autor: {author}\nMensagem: {commit_msg}\nArquivos alterados: {files}\n\n"
+    f"Diff:\n```\n{diff}\n```\n\n"
+    "Forneca:\n1. **Proposito**: O que este commit faz (1-2 frases)\n"
+    "2. **Impacto**: Quais partes do sistema sao afetadas\n"
+    "3. **Qualidade**: Observacoes sobre boas praticas\n"
+    "4. **Riscos**: Possiveis problemas introduzidos\n\nSeja conciso e tecnico."
+)
+
+payload = json.dumps({
+    "model": "gpt-4o",
+    "max_tokens": 600,
+    "messages": [
+        {"role": "system", "content": "Voce e um assistente tecnico especializado em revisao de codigo. Responda sempre em portugues brasileiro."},
+        {"role": "user", "content": prompt}
+    ]
+}).encode("utf-8")
+
+req = urllib.request.Request(
+    "https://api.openai.com/v1/chat/completions",
+    data=payload,
+    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+)
+try:
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.load(r)
+    print(data["choices"][0]["message"]["content"])
+except urllib.error.HTTPError as e:
+    err = json.loads(e.read().decode())
+    print("Erro OpenAI:", err.get("error", {}).get("message", "desconhecido"))
+except Exception as e:
+    print("Erro ao chamar OpenAI:", str(e))
+PYEOF
 
           echo "summary<<EOF" >> $GITHUB_OUTPUT
-          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          cat /tmp/ai_summary.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Gerar Relatório Final Consolidado
