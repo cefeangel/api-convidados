@@ -252,21 +252,18 @@ jobs:
           rm -f ktlint
 
       # ── Swift (iOS) ───────────────────────────
-      - name: SwiftLint — Swift / iOS
+      # SwiftLint exige runner macOS — roda como job separado (ver abaixo)
+      - name: Swift — Verificacao basica
         if: steps.detect-lang.outputs.has_swift == 'true'
         continue-on-error: true
-        runs-on: macos-latest
         run: |
-          echo "### 🍎 SwiftLint — Swift / iOS" >> $GITHUB_STEP_SUMMARY
-          if ! command -v swiftlint &>/dev/null; then
-            brew install swiftlint 2>/dev/null || true
-          fi
-          if command -v swiftlint &>/dev/null; then
-            swiftlint lint --reporter github-actions-logging 2>&1 | head -40 >> $GITHUB_STEP_SUMMARY || true
-          else
-            echo "⚠️ SwiftLint não pôde ser instalado neste runner." >> $GITHUB_STEP_SUMMARY
-            echo "Para análise local instale com: brew install swiftlint" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "### 🍎 Swift / iOS — Verificacao" >> $GITHUB_STEP_SUMMARY
+          SWIFT_FILES=$(find . -name "*.swift" -not -path "*/.github/*" -not -path "*/build/*" | wc -l)
+          echo "Arquivos Swift encontrados: **$SWIFT_FILES**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Analise completa com SwiftLint disponivel no job **swiftlint** (runner macOS)." >> $GITHUB_STEP_SUMMARY
+          git diff --name-only HEAD~1 HEAD 2>/dev/null | grep "\.swift$" | \
+            awk '{print "- " $0}' >> $GITHUB_STEP_SUMMARY || true
 
       # ── Checagens Genéricas ──────────────────
       - name: Verificar Arquivos de Configuração Sensíveis
@@ -576,3 +573,48 @@ jobs:
             echo "Aviso: Discord retornou HTTP $HTTP"
             cat /tmp/discord_resp.txt
           fi
+
+  # ─────────────────────────────────────────────
+  # JOB 6: SwiftLint (iOS) — runner macOS
+  # Roda separado pois exige macos-latest
+  # ─────────────────────────────────────────────
+  swiftlint:
+    name: 🍎 SwiftLint — Swift / iOS
+    runs-on: macos-latest
+    needs: commit-metadata
+    if: always()
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verificar arquivos Swift
+        id: check-swift
+        run: |
+          COUNT=$(find . -name "*.swift" -not -path "*/.github/*" -not -path "*/build/*" | wc -l)
+          echo "swift_count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Arquivos Swift encontrados: $COUNT"
+
+      - name: Instalar e rodar SwiftLint
+        if: steps.check-swift.outputs.swift_count != '0'
+        continue-on-error: true
+        run: |
+          echo "### 🍎 SwiftLint — Swift / iOS" >> $GITHUB_STEP_SUMMARY
+          if ! command -v swiftlint &>/dev/null; then
+            brew install swiftlint 2>/dev/null || true
+          fi
+          if command -v swiftlint &>/dev/null; then
+            swiftlint lint --reporter github-actions-logging 2>&1 | head -50 >> $GITHUB_STEP_SUMMARY || true
+            VIOLATIONS=$(swiftlint lint --quiet 2>/dev/null | wc -l || echo "0")
+            echo "Total de ocorrencias: **$VIOLATIONS**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ SwiftLint nao disponivel neste runner." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Resumo sem Swift
+        if: steps.check-swift.outputs.swift_count == '0'
+        run: |
+          echo "### 🍎 SwiftLint — Swift / iOS" >> $GITHUB_STEP_SUMMARY
+          echo "⏭️ Ignorado — nenhum arquivo .swift encontrado no repositorio." >> $GITHUB_STEP_SUMMARY
