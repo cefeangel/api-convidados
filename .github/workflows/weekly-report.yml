@@ -151,3 +151,36 @@ jobs:
               body: `## 📈 Relatório Semanal de Contribuições\n\n**Período analisado:** Últimos ${days} dias\n**Data de geração:** ${new Date().toISOString()}\n\n> ℹ️ O relatório completo com estatísticas detalhadas e análise de IA está disponível nos [GitHub Actions](../../actions/workflows/weekly-report.yml).\n\nConsulte o **Job Summary** da execução mais recente para ver:\n- 👥 Commits por desenvolvedor\n- 📂 Arquivos mais modificados\n- 📅 Atividade por dia da semana\n- 🤖 Análise gerencial gerada por IA\n\n---\n*Gerado automaticamente pelo sistema de monitoramento.*`,
               labels: ['relatório', 'automação'],
             });
+      - name: Notificar Discord — Relatório Semanal
+        if: always()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DAYS: ${{ steps.period.outputs.days }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -z "$DISCORD_WEBHOOK_URL" ] && echo "DISCORD_WEBHOOK_URL nao configurado, pulando." && exit 0
+
+          TOTAL=$(git log --since="$DAYS days ago" --oneline | wc -l)
+          TOP=$(git log --since="$DAYS days ago" --format="%an" | sort | uniq -c | sort -rn | head -3 | awk '{print $2" "$3" ("$1" commits)"}' | paste -sd ", ")
+          DATE=$(date -u '+%d/%m/%Y')
+
+          PAYLOAD=$(jq -nc             --arg title "📈 Relatório Semanal — ${REPO##*/}"             --arg period "Últimos $DAYS dias · $DATE"             --arg total  "$TOTAL commits no período"             --arg top    "$TOP"             --arg url    "$RUN_URL"             '{
+              embeds: [{
+                title: $title,
+                color: 3447003,
+                url:   $url,
+                fields: [
+                  { name: "📅 Período",           value: $period, inline: false },
+                  { name: "📊 Total de commits",   value: $total,  inline: true  },
+                  { name: "🏆 Top contribuidores", value: $top,    inline: false },
+                  { name: "📋 Relatório completo", value: "Acesse o link acima para ver a análise de IA e estatísticas detalhadas", inline: false }
+                ],
+                footer: { text: "GitHub Actions · Relatório gerado automaticamente" },
+                timestamp: (now | todate)
+              }]
+            }')
+
+          HTTP=$(curl -s -o /tmp/discord_resp.txt -w "%{http_code}"             -X POST "$DISCORD_WEBHOOK_URL"             -H "Content-Type: application/json"             -d "$PAYLOAD")
+
+          [ "$HTTP" = "204" ] && echo "Discord notificado (HTTP 204)" || echo "Discord retornou HTTP $HTTP"

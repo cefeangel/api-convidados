@@ -75,6 +75,8 @@ jobs:
 
   # ─────────────────────────────────────────────
   # JOB 2: Análise de Qualidade de Código
+  # Suporte: JavaScript, TypeScript, HTML, CSS,
+  #          PHP, Python, Go — simultâneos
   # ─────────────────────────────────────────────
   code-quality:
     name: 🧹 Análise de Qualidade de Código
@@ -87,85 +89,134 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detectar Linguagem Principal
+      - name: Detectar Linguagens do Projeto
         id: detect-lang
         run: |
-          if [ -f "package.json" ]; then
-            echo "lang=javascript" >> $GITHUB_OUTPUT
-          elif [ -f "requirements.txt" ] || [ -f "pyproject.toml" ]; then
-            echo "lang=python" >> $GITHUB_OUTPUT
-          elif [ -f "go.mod" ]; then
-            echo "lang=go" >> $GITHUB_OUTPUT
-          elif [ -f "Cargo.toml" ]; then
-            echo "lang=rust" >> $GITHUB_OUTPUT
-          elif find . -name "*.java" -maxdepth 3 | grep -q .; then
-            echo "lang=java" >> $GITHUB_OUTPUT
-          else
-            echo "lang=generic" >> $GITHUB_OUTPUT
-          fi
+          HAS_JS=false;  HAS_PHP=false; HAS_PY=false
+          HAS_GO=false;  HAS_HTML=false; HAS_CSS=false
+          [ -f "package.json" ] && HAS_JS=true
+          find . -not -path "*/node_modules/*" -not -path "*/.github/*" -not -path "*/vendor/*" \
+            -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" 2>/dev/null | grep -q . && HAS_JS=true
+          find . -not -path "*/node_modules/*" -not -path "*/.github/*" -not -path "*/vendor/*" \
+            -name "*.php" -maxdepth 5 2>/dev/null | grep -q . && HAS_PHP=true
+          find . -not -path "*/node_modules/*" -not -path "*/.github/*" \
+            -name "*.html" -o -name "*.htm" 2>/dev/null | grep -q . && HAS_HTML=true
+          find . -not -path "*/node_modules/*" -not -path "*/.github/*" \
+            -name "*.css" -o -name "*.scss" -o -name "*.sass" 2>/dev/null | grep -q . && HAS_CSS=true
+          { [ -f "requirements.txt" ] || [ -f "pyproject.toml" ]; } && HAS_PY=true
+          [ -f "go.mod" ] && HAS_GO=true
+          echo "has_js=$HAS_JS"   >> $GITHUB_OUTPUT
+          echo "has_php=$HAS_PHP" >> $GITHUB_OUTPUT
+          echo "has_html=$HAS_HTML" >> $GITHUB_OUTPUT
+          echo "has_css=$HAS_CSS"  >> $GITHUB_OUTPUT
+          echo "has_py=$HAS_PY"   >> $GITHUB_OUTPUT
+          echo "has_go=$HAS_GO"   >> $GITHUB_OUTPUT
+          echo "### 🔎 Linguagens detectadas" >> $GITHUB_STEP_SUMMARY
+          echo "| Linguagem | Presente |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| JavaScript / TypeScript | $HAS_JS |" >> $GITHUB_STEP_SUMMARY
+          echo "| HTML | $HAS_HTML |" >> $GITHUB_STEP_SUMMARY
+          echo "| CSS / SCSS | $HAS_CSS |" >> $GITHUB_STEP_SUMMARY
+          echo "| PHP | $HAS_PHP |" >> $GITHUB_STEP_SUMMARY
+          echo "| Python | $HAS_PY |" >> $GITHUB_STEP_SUMMARY
+          echo "| Go | $HAS_GO |" >> $GITHUB_STEP_SUMMARY
 
-      # ── JavaScript / TypeScript ──────────────
+      # ── JavaScript / TypeScript / HTML / CSS ──
       - name: Setup Node.js
-        if: steps.detect-lang.outputs.lang == 'javascript'
+        if: steps.detect-lang.outputs.has_js == 'true' || steps.detect-lang.outputs.has_html == 'true' || steps.detect-lang.outputs.has_css == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Instalar Dependências JS
-        if: steps.detect-lang.outputs.lang == 'javascript'
-        run: npm ci --prefer-offline 2>/dev/null || npm install
+      - name: Instalar ferramentas JS/HTML/CSS
+        if: steps.detect-lang.outputs.has_js == 'true' || steps.detect-lang.outputs.has_html == 'true' || steps.detect-lang.outputs.has_css == 'true'
+        run: |
+          npm install -g htmlhint stylelint stylelint-config-standard 2>/dev/null || true
+          [ -f "package.json" ] && (npm ci --prefer-offline 2>/dev/null || npm install) || true
 
-      - name: ESLint (JS/TS)
-        if: steps.detect-lang.outputs.lang == 'javascript'
+      - name: ESLint — JavaScript / TypeScript
+        if: steps.detect-lang.outputs.has_js == 'true'
         continue-on-error: true
         run: |
-          echo "### 🔍 ESLint - Análise de Código JS/TS" >> $GITHUB_STEP_SUMMARY
-          if [ -f ".eslintrc*" ] || [ -f "eslint.config*" ]; then
-            npx eslint . --format=compact 2>&1 | tee eslint-report.txt
-            ISSUES=$(wc -l < eslint-report.txt)
-            echo "Total de problemas encontrados: **$ISSUES**" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔍 ESLint — JavaScript / TypeScript" >> $GITHUB_STEP_SUMMARY
+          if ls .eslintrc* eslint.config* 2>/dev/null | grep -q .; then
+            npx eslint . --ext .js,.ts,.jsx,.tsx --format=compact 2>&1 | tail -20 >> $GITHUB_STEP_SUMMARY || true
           else
-            echo "⚠️ Nenhuma configuração ESLint encontrada." >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ Sem config ESLint — verificação básica de sintaxe:" >> $GITHUB_STEP_SUMMARY
+            find . -not -path "*/node_modules/*" -not -path "*/.github/*" \
+              \( -name "*.js" -o -name "*.ts" \) -maxdepth 5 | head -20 | \
+              xargs -I{} node --check {} 2>&1 | grep -v "^$" >> $GITHUB_STEP_SUMMARY || true
           fi
+
+      - name: HTMLHint — HTML
+        if: steps.detect-lang.outputs.has_html == 'true'
+        continue-on-error: true
+        run: |
+          echo "### 🌐 HTMLHint — HTML" >> $GITHUB_STEP_SUMMARY
+          find . -not -path "*/node_modules/*" -not -path "*/.github/*" -not -path "*/vendor/*" \
+            \( -name "*.html" -o -name "*.htm" \) -maxdepth 5 | \
+            xargs htmlhint 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+
+      - name: Stylelint — CSS / SCSS
+        if: steps.detect-lang.outputs.has_css == 'true'
+        continue-on-error: true
+        run: |
+          echo "### 🎨 Stylelint — CSS / SCSS" >> $GITHUB_STEP_SUMMARY
+          CONFIG=""
+          ls .stylelintrc* stylelint.config* 2>/dev/null | grep -q . || CONFIG="--config={\"extends\":[\"stylelint-config-standard\"]}"
+          find . -not -path "*/node_modules/*" -not -path "*/.github/*" \
+            \( -name "*.css" -o -name "*.scss" -o -name "*.sass" \) -maxdepth 5 | \
+            xargs npx stylelint $CONFIG 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+
+      # ── PHP ──────────────────────────────────
+      - name: Setup PHP
+        if: steps.detect-lang.outputs.has_php == 'true'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: phpcs, phpstan
+
+      - name: PHP_CodeSniffer — PHP
+        if: steps.detect-lang.outputs.has_php == 'true'
+        continue-on-error: true
+        run: |
+          echo "### 🐘 PHP_CodeSniffer — PHP" >> $GITHUB_STEP_SUMMARY
+          phpcs --standard=PSR12 --extensions=php --ignore=vendor/ . 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+
+      - name: PHPStan — Análise Estática PHP
+        if: steps.detect-lang.outputs.has_php == 'true'
+        continue-on-error: true
+        run: |
+          echo "### 🔬 PHPStan — PHP" >> $GITHUB_STEP_SUMMARY
+          find . -name "*.php" -not -path "*/vendor/*" -maxdepth 5 > /tmp/php_files.txt
+          head -20 /tmp/php_files.txt | xargs phpstan analyse --level=5 --no-progress 2>&1 | tail -20 >> $GITHUB_STEP_SUMMARY || true
 
       # ── Python ───────────────────────────────
       - name: Setup Python
-        if: steps.detect-lang.outputs.lang == 'python'
+        if: steps.detect-lang.outputs.has_py == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Instalar Ferramentas Python
-        if: steps.detect-lang.outputs.lang == 'python'
-        run: pip install flake8 pylint black isort --quiet
-
-      - name: Flake8 (Python)
-        if: steps.detect-lang.outputs.lang == 'python'
+      - name: Flake8 + Black — Python
+        if: steps.detect-lang.outputs.has_py == 'true'
         continue-on-error: true
         run: |
-          echo "### 🐍 Flake8 - Análise Python" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          flake8 . --max-line-length=120 --statistics 2>&1 | tee flake8-report.txt
-          cat flake8-report.txt >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-
-      - name: Black - Verificação de Formatação
-        if: steps.detect-lang.outputs.lang == 'python'
-        continue-on-error: true
-        run: |
-          echo "### 🎨 Black - Formatação Python" >> $GITHUB_STEP_SUMMARY
-          black --check --diff . 2>&1 | tail -5 >> $GITHUB_STEP_SUMMARY || \
-            echo "⚠️ Arquivos precisam de reformatação." >> $GITHUB_STEP_SUMMARY
+          pip install flake8 black --quiet
+          echo "### 🐍 Flake8 — Python" >> $GITHUB_STEP_SUMMARY
+          flake8 . --max-line-length=120 --statistics 2>&1 | tail -20 >> $GITHUB_STEP_SUMMARY || true
+          echo "### 🎨 Black — Formatação Python" >> $GITHUB_STEP_SUMMARY
+          black --check --diff . 2>&1 | tail -10 >> $GITHUB_STEP_SUMMARY || true
 
       # ── Go ───────────────────────────────────
       - name: Setup Go
-        if: steps.detect-lang.outputs.lang == 'go'
+        if: steps.detect-lang.outputs.has_go == 'true'
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
 
       - name: Go Vet
-        if: steps.detect-lang.outputs.lang == 'go'
+        if: steps.detect-lang.outputs.has_go == 'true'
         continue-on-error: true
         run: |
           echo "### 🐹 Go Vet" >> $GITHUB_STEP_SUMMARY
@@ -408,3 +459,74 @@ jobs:
               repo: context.repo.repo,
               body: body
             });
+
+      # ─────────────────────────────────────────────
+      # Notificação Discord
+      # ─────────────────────────────────────────────
+      - name: Notificar Discord
+        if: always()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          AUTHOR:         ${{ needs.commit-metadata.outputs.author_name }}
+          EMAIL:          ${{ needs.commit-metadata.outputs.author_email }}
+          BRANCH:         ${{ needs.commit-metadata.outputs.branch }}
+          SHA:            ${{ needs.commit-metadata.outputs.commit_sha }}
+          COMMIT_MSG:     ${{ needs.commit-metadata.outputs.commit_message }}
+          FILES:          ${{ needs.commit-metadata.outputs.files_changed }}
+          QUALITY_RESULT: ${{ needs.code-quality.result }}
+          SECURITY_RESULT: ${{ needs.security-scan.result }}
+          SECRETS_RESULT: ${{ needs.secrets-scan.result }}
+          AI_SUMMARY:     ${{ steps.ai-summary.outputs.summary }}
+          REPO:           ${{ github.repository }}
+          RUN_URL:        ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -z "$DISCORD_WEBHOOK_URL" ] && echo "DISCORD_WEBHOOK_URL nao configurado, pulando." && exit 0
+
+          # Determina cor e status geral
+          ALL_OK=true
+          [ "$QUALITY_RESULT"  != "success" ] && ALL_OK=false
+          [ "$SECURITY_RESULT" != "success" ] && ALL_OK=false
+          [ "$SECRETS_RESULT"  != "success" ] && ALL_OK=false
+          COLOR=3066993   # verde
+          TITLE_EMOJI="✅"
+          $ALL_OK || { COLOR=15158332; TITLE_EMOJI="⚠️"; }  # vermelho se houver falha
+
+          # Badges de status
+          badge(){ [ "$1" = "success" ] && echo "✅ passou" || echo "❌ falhou"; }
+          Q=$(badge "$QUALITY_RESULT")
+          S=$(badge "$SECURITY_RESULT")
+          SEC=$(badge "$SECRETS_RESULT")
+
+          # Resumo da IA (primeiras 800 chars para não estourar limite Discord)
+          AI_SHORT=$(echo "$AI_SUMMARY" | head -c 800)
+          [ ${#AI_SUMMARY} -gt 800 ] && AI_SHORT="${AI_SHORT}..."
+
+          PAYLOAD=$(jq -nc             --arg title  "$TITLE_EMOJI Novo commit em ${REPO##*/}"             --arg author "$AUTHOR <$EMAIL>"             --arg branch "$BRANCH"             --arg sha    "${SHA:0:8}"             --arg msg    "$COMMIT_MSG"             --arg files  "$FILES arquivo(s) alterado(s)"             --arg ai     "$AI_SHORT"             --arg q      "$Q"             --arg s      "$S"             --arg sec    "$SEC"             --arg url    "$RUN_URL"             --argjson color "$COLOR"             '{
+              embeds: [{
+                title: $title,
+                color: $color,
+                url:   $url,
+                fields: [
+                  { name: "👤 Autor",       value: $author, inline: false },
+                  { name: "🌿 Branch",      value: $branch, inline: true  },
+                  { name: "🔖 SHA",         value: $sha,    inline: true  },
+                  { name: "📝 Mensagem",    value: $msg,    inline: false },
+                  { name: "📂 Alterações",  value: $files,  inline: false },
+                  { name: "🤖 Análise IA",  value: $ai,     inline: false },
+                  { name: "🧹 Qualidade",   value: $q,      inline: true  },
+                  { name: "🛡️ Vulnerabilidades", value: $s, inline: true  },
+                  { name: "🔐 Segredos",    value: $sec,    inline: true  }
+                ],
+                footer: { text: "GitHub Actions · \($title | ltrimstr("✅ ") | ltrimstr("⚠️ "))" },
+                timestamp: (now | todate)
+              }]
+            }')
+
+          HTTP=$(curl -s -o /tmp/discord_resp.txt -w "%{http_code}"             -X POST "$DISCORD_WEBHOOK_URL"             -H "Content-Type: application/json"             -d "$PAYLOAD")
+
+          if [ "$HTTP" = "204" ]; then
+            echo "Notificacao Discord enviada com sucesso (HTTP 204)"
+          else
+            echo "Aviso: Discord retornou HTTP $HTTP"
+            cat /tmp/discord_resp.txt
+          fi
