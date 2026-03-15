@@ -55,27 +55,52 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verificar se há código fonte
+        id: check-source
+        run: |
+          LANG="${{ matrix.language }}"
+          HAS_CODE="false"
+          if [ "$LANG" = "javascript" ]; then
+            find . -not -path "./.github/*" -not -path "./node_modules/*" \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \) | grep -q . && HAS_CODE="true"
+          elif [ "$LANG" = "python" ]; then
+            find . -not -path "./.github/*" -name "*.py" | grep -q . && HAS_CODE="true"
+          elif [ "$LANG" = "go" ]; then
+            find . -name "*.go" | grep -q . && HAS_CODE="true"
+          elif [ "$LANG" = "java" ]; then
+            find . -name "*.java" | grep -q . && HAS_CODE="true"
+          fi
+          echo "has_code=$HAS_CODE" >> $GITHUB_OUTPUT
+          echo "Linguagem: $LANG | Código encontrado: $HAS_CODE"
+
       - name: Inicializar CodeQL
+        if: steps.check-source.outputs.has_code == 'true'
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
           queries: +security-and-quality
 
       - name: Build Automático
+        if: steps.check-source.outputs.has_code == 'true'
         uses: github/codeql-action/autobuild@v3
 
       - name: Executar Análise CodeQL
+        if: steps.check-source.outputs.has_code == 'true'
+        continue-on-error: true
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"
 
       - name: Resumo da Análise
         run: |
-          echo "### 🔬 CodeQL — ${{ matrix.language }}" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Análise concluída. Verifique **Security → Code scanning alerts**." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Queries executadas:** security-and-quality" >> $GITHUB_STEP_SUMMARY
-          echo "**Linguagem:** ${{ matrix.language }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check-source.outputs.has_code }}" = "true" ]; then
+            echo "### 🔬 CodeQL — ${{ matrix.language }}" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Análise concluída. Verifique **Security → Code scanning alerts**." >> $GITHUB_STEP_SUMMARY
+            echo "**Queries executadas:** security-and-quality" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### 🔬 CodeQL — ${{ matrix.language }}" >> $GITHUB_STEP_SUMMARY
+            echo "⏭️ Ignorado — nenhum arquivo .${{ matrix.language }} encontrado ainda." >> $GITHUB_STEP_SUMMARY
+            echo "Quando o código da API for adicionado, a análise rodará automaticamente." >> $GITHUB_STEP_SUMMARY
+          fi
 
   dependency-review:
     name: 📦 Revisão de Dependências
