@@ -1,0 +1,434 @@
+name: 🔍 Monitoramento de Commits
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  security-events: write
+
+jobs:
+  # ─────────────────────────────────────────────
+  # JOB 1: Identificar autor e coletar metadados
+  # ─────────────────────────────────────────────
+  commit-metadata:
+    name: 📋 Coletar Metadados do Commit
+    runs-on: ubuntu-latest
+    outputs:
+      author_name:    ${{ steps.meta.outputs.author_name }}
+      author_email:   ${{ steps.meta.outputs.author_email }}
+      commit_sha:     ${{ steps.meta.outputs.commit_sha }}
+      commit_message: ${{ steps.meta.outputs.commit_message }}
+      branch:         ${{ steps.meta.outputs.branch }}
+      files_changed:  ${{ steps.meta.outputs.files_changed }}
+      timestamp:      ${{ steps.meta.outputs.timestamp }}
+
+    steps:
+      - name: Checkout do Repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Extrair Metadados
+        id: meta
+        run: |
+          AUTHOR_NAME=$(git log -1 --format="%an")
+          AUTHOR_EMAIL=$(git log -1 --format="%ae")
+          COMMIT_SHA=$(git rev-parse HEAD)
+          COMMIT_MSG=$(git log -1 --format="%s")
+          BRANCH=${GITHUB_REF#refs/heads/}
+          FILES_CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | wc -l || echo "1")
+          TIMESTAMP=$(git log -1 --format="%ci")
+
+          echo "author_name=$AUTHOR_NAME"     >> $GITHUB_OUTPUT
+          echo "author_email=$AUTHOR_EMAIL"   >> $GITHUB_OUTPUT
+          echo "commit_sha=$COMMIT_SHA"       >> $GITHUB_OUTPUT
+          echo "commit_message=$COMMIT_MSG"   >> $GITHUB_OUTPUT
+          echo "branch=$BRANCH"               >> $GITHUB_OUTPUT
+          echo "files_changed=$FILES_CHANGED" >> $GITHUB_OUTPUT
+          echo "timestamp=$TIMESTAMP"         >> $GITHUB_OUTPUT
+
+          echo "### 📋 Metadados do Commit" >> $GITHUB_STEP_SUMMARY
+          echo "| Campo          | Valor                    |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------------|--------------------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Autor**      | $AUTHOR_NAME             |" >> $GITHUB_STEP_SUMMARY
+          echo "| **E-mail**     | $AUTHOR_EMAIL            |" >> $GITHUB_STEP_SUMMARY
+          echo "| **SHA**        | \`${COMMIT_SHA:0:8}\`    |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch**     | $BRANCH                  |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Mensagem**   | $COMMIT_MSG              |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Arquivos**   | $FILES_CHANGED alterados |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Timestamp**  | $TIMESTAMP               |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Listar Arquivos Alterados
+        run: |
+          echo "### 📂 Arquivos Alterados" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          git diff --stat HEAD~1 HEAD 2>/dev/null || git show --stat HEAD
+          git diff --stat HEAD~1 HEAD 2>/dev/null >> $GITHUB_STEP_SUMMARY || \
+            git show --stat HEAD >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # ─────────────────────────────────────────────
+  # JOB 2: Análise de Qualidade de Código
+  # ─────────────────────────────────────────────
+  code-quality:
+    name: 🧹 Análise de Qualidade de Código
+    runs-on: ubuntu-latest
+    needs: commit-metadata
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detectar Linguagem Principal
+        id: detect-lang
+        run: |
+          if [ -f "package.json" ]; then
+            echo "lang=javascript" >> $GITHUB_OUTPUT
+          elif [ -f "requirements.txt" ] || [ -f "pyproject.toml" ]; then
+            echo "lang=python" >> $GITHUB_OUTPUT
+          elif [ -f "go.mod" ]; then
+            echo "lang=go" >> $GITHUB_OUTPUT
+          elif [ -f "Cargo.toml" ]; then
+            echo "lang=rust" >> $GITHUB_OUTPUT
+          elif find . -name "*.java" -maxdepth 3 | grep -q .; then
+            echo "lang=java" >> $GITHUB_OUTPUT
+          else
+            echo "lang=generic" >> $GITHUB_OUTPUT
+          fi
+
+      # ── JavaScript / TypeScript ──────────────
+      - name: Setup Node.js
+        if: steps.detect-lang.outputs.lang == 'javascript'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar Dependências JS
+        if: steps.detect-lang.outputs.lang == 'javascript'
+        run: npm ci --prefer-offline 2>/dev/null || npm install
+
+      - name: ESLint (JS/TS)
+        if: steps.detect-lang.outputs.lang == 'javascript'
+        continue-on-error: true
+        run: |
+          echo "### 🔍 ESLint - Análise de Código JS/TS" >> $GITHUB_STEP_SUMMARY
+          if [ -f ".eslintrc*" ] || [ -f "eslint.config*" ]; then
+            npx eslint . --format=compact 2>&1 | tee eslint-report.txt
+            ISSUES=$(wc -l < eslint-report.txt)
+            echo "Total de problemas encontrados: **$ISSUES**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Nenhuma configuração ESLint encontrada." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # ── Python ───────────────────────────────
+      - name: Setup Python
+        if: steps.detect-lang.outputs.lang == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar Ferramentas Python
+        if: steps.detect-lang.outputs.lang == 'python'
+        run: pip install flake8 pylint black isort --quiet
+
+      - name: Flake8 (Python)
+        if: steps.detect-lang.outputs.lang == 'python'
+        continue-on-error: true
+        run: |
+          echo "### 🐍 Flake8 - Análise Python" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          flake8 . --max-line-length=120 --statistics 2>&1 | tee flake8-report.txt
+          cat flake8-report.txt >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Black - Verificação de Formatação
+        if: steps.detect-lang.outputs.lang == 'python'
+        continue-on-error: true
+        run: |
+          echo "### 🎨 Black - Formatação Python" >> $GITHUB_STEP_SUMMARY
+          black --check --diff . 2>&1 | tail -5 >> $GITHUB_STEP_SUMMARY || \
+            echo "⚠️ Arquivos precisam de reformatação." >> $GITHUB_STEP_SUMMARY
+
+      # ── Go ───────────────────────────────────
+      - name: Setup Go
+        if: steps.detect-lang.outputs.lang == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Go Vet
+        if: steps.detect-lang.outputs.lang == 'go'
+        continue-on-error: true
+        run: |
+          echo "### 🐹 Go Vet" >> $GITHUB_STEP_SUMMARY
+          go vet ./... 2>&1 >> $GITHUB_STEP_SUMMARY || true
+
+      # ── Checagens Genéricas ──────────────────
+      - name: Verificar Arquivos de Configuração Sensíveis
+        run: |
+          echo "### 🔒 Verificação de Arquivos Sensíveis" >> $GITHUB_STEP_SUMMARY
+          SENSITIVE_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | \
+            grep -E "\.(env|pem|key|p12|pfx|secret)$|id_rsa|id_dsa" || true)
+          if [ -n "$SENSITIVE_FILES" ]; then
+            echo "⚠️ **ATENÇÃO**: Arquivos potencialmente sensíveis detectados:" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "$SENSITIVE_FILES" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ Nenhum arquivo sensível detectado." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Verificar Arquivos Grandes
+        run: |
+          echo "### 📦 Verificação de Tamanho de Arquivos" >> $GITHUB_STEP_SUMMARY
+          LARGE_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | \
+            xargs -I{} sh -c 'test -f "{}" && stat -c "%s %n" "{}"' 2>/dev/null | \
+            awk '$1 > 1048576 {print $2, "(" int($1/1024) "KB)"}' || true)
+          if [ -n "$LARGE_FILES" ]; then
+            echo "⚠️ Arquivos maiores que 1MB:" >> $GITHUB_STEP_SUMMARY
+            echo "$LARGE_FILES" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ Nenhum arquivo muito grande detectado." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ─────────────────────────────────────────────
+  # JOB 3: Scan de Segurança com Trivy
+  # ─────────────────────────────────────────────
+  security-scan:
+    name: 🛡️ Scan de Segurança e Vulnerabilidades
+    runs-on: ubuntu-latest
+    needs: commit-metadata
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trivy - Scan de Vulnerabilidades em Dependências
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'
+
+      - name: Upload SARIF ao GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Trivy - Resumo Legível
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'
+        continue-on-error: true
+
+      - name: Gerar Resumo de Segurança
+        run: |
+          echo "### 🛡️ Resumo do Scan de Segurança" >> $GITHUB_STEP_SUMMARY
+          echo "Scan realizado com **Trivy** em: \`$(date -u '+%Y-%m-%d %H:%M UTC')\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📊 Resultados disponíveis na aba **Security → Vulnerability alerts**" >> $GITHUB_STEP_SUMMARY
+
+  # ─────────────────────────────────────────────
+  # JOB 4: Scan de Segredos com Gitleaks
+  # ─────────────────────────────────────────────
+  secrets-scan:
+    name: 🔐 Detecção de Segredos Expostos
+    runs-on: ubuntu-latest
+    needs: commit-metadata
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks - Scan de Segredos
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        continue-on-error: true
+
+      - name: Resumo de Detecção de Segredos
+        run: |
+          echo "### 🔐 Detecção de Segredos" >> $GITHUB_STEP_SUMMARY
+          echo "Scan realizado com **Gitleaks** para detectar:" >> $GITHUB_STEP_SUMMARY
+          echo "- API Keys e tokens expostos" >> $GITHUB_STEP_SUMMARY
+          echo "- Senhas em texto claro" >> $GITHUB_STEP_SUMMARY
+          echo "- Chaves privadas (RSA, SSH)" >> $GITHUB_STEP_SUMMARY
+          echo "- Credenciais de banco de dados" >> $GITHUB_STEP_SUMMARY
+          echo "- Tokens OAuth e JWT" >> $GITHUB_STEP_SUMMARY
+
+  # ─────────────────────────────────────────────
+  # JOB 5: Geração de Relatório Consolidado (IA)
+  # ─────────────────────────────────────────────
+  generate-report:
+    name: 📊 Gerar Relatório com IA
+    runs-on: ubuntu-latest
+    needs: [commit-metadata, code-quality, security-scan, secrets-scan]
+    if: always()
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Coletar Diff do Commit
+        id: diff
+        run: |
+          DIFF=$(git diff HEAD~1 HEAD 2>/dev/null | head -200 || git show HEAD | head -200)
+          echo "diff<<EOF" >> $GITHUB_OUTPUT
+          echo "$DIFF" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Gerar Resumo IA via OpenAI API
+        id: ai-summary
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AUTHOR: ${{ needs.commit-metadata.outputs.author_name }}
+          COMMIT_MSG: ${{ needs.commit-metadata.outputs.commit_message }}
+          FILES_CHANGED: ${{ needs.commit-metadata.outputs.files_changed }}
+        run: |
+          DIFF_CONTENT=$(git diff HEAD~1 HEAD 2>/dev/null | head -150 || git show HEAD | head -150)
+
+          RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model\": \"gpt-4o\",
+              \"max_tokens\": 600,
+              \"messages\": [
+                {
+                  \"role\": \"system\",
+                  \"content\": \"Você é um assistente técnico especializado em revisão de código. Responda sempre em português brasileiro de forma objetiva e concisa.\"
+                },
+                {
+                  \"role\": \"user\",
+                  \"content\": \"Analise este commit do GitHub e gere um resumo técnico em português brasileiro. Seja objetivo e direto.\\n\\nAutor: $AUTHOR\\nMensagem: $COMMIT_MSG\\nArquivos alterados: $FILES_CHANGED\\n\\nDiff (primeiras linhas):\\n\`\`\`\\n$DIFF_CONTENT\\n\`\`\`\\n\\nForneça:\\n1. **Propósito**: O que este commit faz (1-2 frases)\\n2. **Impacto**: Quais partes do sistema são afetadas\\n3. **Qualidade**: Observações sobre boas práticas\\n4. **Riscos**: Possíveis problemas introduzidos\\n\\nSeja conciso e técnico.\"
+                }
+              ]
+            }")
+
+          SUMMARY=$(echo "$RESPONSE" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          if 'choices' in data and len(data['choices']) > 0:
+              print(data['choices'][0]['message']['content'])
+          else:
+              print('Erro ao gerar resumo: ' + str(data.get('error', {}).get('message', 'Desconhecido')))
+          ")
+
+          echo "summary<<EOF" >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Gerar Relatório Final Consolidado
+        env:
+          AUTHOR: ${{ needs.commit-metadata.outputs.author_name }}
+          EMAIL: ${{ needs.commit-metadata.outputs.author_email }}
+          SHA: ${{ needs.commit-metadata.outputs.commit_sha }}
+          BRANCH: ${{ needs.commit-metadata.outputs.branch }}
+          COMMIT_MSG: ${{ needs.commit-metadata.outputs.commit_message }}
+          FILES: ${{ needs.commit-metadata.outputs.files_changed }}
+          TIMESTAMP: ${{ needs.commit-metadata.outputs.timestamp }}
+          QUALITY_RESULT: ${{ needs.code-quality.result }}
+          SECURITY_RESULT: ${{ needs.security-scan.result }}
+          SECRETS_RESULT: ${{ needs.secrets-scan.result }}
+          AI_SUMMARY: ${{ steps.ai-summary.outputs.summary }}
+        run: |
+          STATUS_QUALITY="✅"
+          STATUS_SECURITY="✅"
+          STATUS_SECRETS="✅"
+          [ "$QUALITY_RESULT" != "success" ] && STATUS_QUALITY="⚠️"
+          [ "$SECURITY_RESULT" != "success" ] && STATUS_SECURITY="⚠️"
+          [ "$SECRETS_RESULT" != "success" ] && STATUS_SECRETS="⚠️"
+
+          cat >> $GITHUB_STEP_SUMMARY << REPORT
+
+          ---
+          # 📊 Relatório de Monitoramento de Commit
+
+          ## 👤 Informações do Desenvolvedor
+          | Campo       | Valor            |
+          |-------------|------------------|
+          | **Autor**   | $AUTHOR          |
+          | **E-mail**  | $EMAIL           |
+          | **Branch**  | \`$BRANCH\`      |
+          | **SHA**     | \`${SHA:0:8}\`   |
+          | **Data**    | $TIMESTAMP       |
+
+          ## 📝 Commit
+          > $COMMIT_MSG
+
+          **Arquivos alterados:** $FILES
+
+          ## 🤖 Análise de IA
+          $AI_SUMMARY
+
+          ## 📋 Status dos Checks
+          | Check               | Status             |
+          |---------------------|--------------------|
+          | 🧹 Qualidade Código | $STATUS_QUALITY    |
+          | 🛡️ Vulnerabilidades | $STATUS_SECURITY   |
+          | 🔐 Segredos Expostos| $STATUS_SECRETS    |
+
+          ---
+          *Relatório gerado automaticamente em $(date -u '+%Y-%m-%d %H:%M UTC')*
+          REPORT
+
+      - name: Comentar no PR (se aplicável)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          AI_SUMMARY: ${{ steps.ai-summary.outputs.summary }}
+          AUTHOR: ${{ needs.commit-metadata.outputs.author_name }}
+          FILES: ${{ needs.commit-metadata.outputs.files_changed }}
+          QUALITY_RESULT: ${{ needs.code-quality.result }}
+          SECURITY_RESULT: ${{ needs.security-scan.result }}
+          SECRETS_RESULT: ${{ needs.secrets-scan.result }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const q = process.env.QUALITY_RESULT === 'success' ? '✅' : '⚠️';
+            const s = process.env.SECURITY_RESULT === 'success' ? '✅' : '⚠️';
+            const sec = process.env.SECRETS_RESULT === 'success' ? '✅' : '⚠️';
+
+            const body = `## 🔍 Relatório de Monitoramento de Commit
+
+            **Autor:** ${process.env.AUTHOR} | **Arquivos:** ${process.env.FILES}
+
+            ### 🤖 Análise Automática (IA)
+            ${process.env.AI_SUMMARY}
+
+            ### 📋 Checks
+            | Check | Status |
+            |-------|--------|
+            | 🧹 Qualidade de Código | ${q} |
+            | 🛡️ Vulnerabilidades | ${s} |
+            | 🔐 Segredos Expostos | ${sec} |
+
+            <sub>Gerado automaticamente por GitHub Actions · ${new Date().toISOString()}</sub>`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
