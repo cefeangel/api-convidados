@@ -82,6 +82,8 @@ jobs:
     name: 🧹 Análise de Qualidade de Código
     runs-on: ubuntu-latest
     needs: commit-metadata
+    outputs:
+      quality_status: ${{ steps.final-status.outputs.quality_status }}
 
     steps:
       - name: Checkout
@@ -404,23 +406,27 @@ jobs:
           git diff --name-only HEAD~1 HEAD 2>/dev/null | grep "\.swift$" | \
             awk '{print "- " $0}' >> $GITHUB_STEP_SUMMARY || true
 
-      # ── Verificação final — falha o job se QUALQUER linguagem tiver erros ou warnings ──
+      # ── Verificação final ──────────────────────
+      # ❌ Erros   → exit 1 (job vermelho no Actions)
+      # ⚠️ Warnings → exit 0 (job verde, mas ⚠️ visível no Summary e Discord)
+      # ✅ Limpo   → exit 0
       - name: Resultado final da qualidade de código
+        id: final-status
         if: always()
         run: |
+          echo "---" >> $GITHUB_STEP_SUMMARY
           if [ "$has_lint_error" = "true" ]; then
-            echo "---" >> $GITHUB_STEP_SUMMARY
             echo "## ❌ Qualidade de Código — REPROVADA" >> $GITHUB_STEP_SUMMARY
             echo "Erros críticos encontrados. Corrija antes de fazer merge." >> $GITHUB_STEP_SUMMARY
+            echo "quality_status=error" >> $GITHUB_OUTPUT
             exit 1
           elif [ "$has_lint_warning" = "true" ]; then
-            echo "---" >> $GITHUB_STEP_SUMMARY
             echo "## ⚠️ Qualidade de Código — AVISOS ENCONTRADOS" >> $GITHUB_STEP_SUMMARY
-            echo "Warnings detectados. Revise os itens acima." >> $GITHUB_STEP_SUMMARY
-            exit 1
+            echo "Warnings detectados. Recomendado revisar os itens acima." >> $GITHUB_STEP_SUMMARY
+            echo "quality_status=warning" >> $GITHUB_OUTPUT
           else
-            echo "---" >> $GITHUB_STEP_SUMMARY
             echo "## ✅ Qualidade de Código — APROVADA" >> $GITHUB_STEP_SUMMARY
+            echo "quality_status=ok" >> $GITHUB_OUTPUT
           fi
 
       - name: Verificar Arquivos de Configuração Sensíveis
@@ -576,16 +582,23 @@ jobs:
           FILES: ${{ needs.commit-metadata.outputs.files_changed }}
           TIMESTAMP: ${{ needs.commit-metadata.outputs.timestamp }}
           QUALITY_RESULT: ${{ needs.code-quality.result }}
+          QUALITY_STATUS: ${{ needs.code-quality.outputs.quality_status }}
           SECURITY_RESULT: ${{ needs.security-scan.result }}
           SECRETS_RESULT: ${{ needs.secrets-scan.result }}
           AI_SUMMARY: ${{ steps.ai-summary.outputs.summary }}
         run: |
-          STATUS_QUALITY="✅"
+          # Qualidade: usa o output granular do job (error/warning/ok)
           STATUS_SECURITY="✅"
           STATUS_SECRETS="✅"
-          [ "$QUALITY_RESULT" != "success" ] && STATUS_QUALITY="⚠️"
+          if [ "$QUALITY_STATUS" = "error" ] || [ "$QUALITY_RESULT" = "failure" ]; then
+            STATUS_QUALITY="❌ Erros encontrados"
+          elif [ "$QUALITY_STATUS" = "warning" ]; then
+            STATUS_QUALITY="⚠️ Avisos encontrados"
+          else
+            STATUS_QUALITY="✅ Aprovado"
+          fi
           [ "$SECURITY_RESULT" != "success" ] && STATUS_SECURITY="⚠️"
-          [ "$SECRETS_RESULT" != "success" ] && STATUS_SECRETS="⚠️"
+          [ "$SECRETS_RESULT"  != "success" ] && STATUS_SECRETS="⚠️"
 
           cat >> $GITHUB_STEP_SUMMARY << REPORT
 
@@ -628,6 +641,7 @@ jobs:
           AUTHOR: ${{ needs.commit-metadata.outputs.author_name }}
           FILES: ${{ needs.commit-metadata.outputs.files_changed }}
           QUALITY_RESULT: ${{ needs.code-quality.result }}
+          QUALITY_STATUS: ${{ needs.code-quality.outputs.quality_status }}
           SECURITY_RESULT: ${{ needs.security-scan.result }}
           SECRETS_RESULT: ${{ needs.secrets-scan.result }}
         with:
@@ -674,6 +688,7 @@ jobs:
           COMMIT_MSG:     ${{ needs.commit-metadata.outputs.commit_message }}
           FILES:          ${{ needs.commit-metadata.outputs.files_changed }}
           QUALITY_RESULT: ${{ needs.code-quality.result }}
+          QUALITY_STATUS: ${{ needs.code-quality.outputs.quality_status }}
           SECURITY_RESULT: ${{ needs.security-scan.result }}
           SECRETS_RESULT: ${{ needs.secrets-scan.result }}
           AI_SUMMARY:     ${{ steps.ai-summary.outputs.summary }}
@@ -683,19 +698,25 @@ jobs:
           [ -z "$DISCORD_WEBHOOK_URL" ] && echo "DISCORD_WEBHOOK_URL nao configurado, pulando." && exit 0
 
           # Determina cor e status geral
-          ALL_OK=true
-          [ "$QUALITY_RESULT"  != "success" ] && ALL_OK=false
-          [ "$SECURITY_RESULT" != "success" ] && ALL_OK=false
-          [ "$SECRETS_RESULT"  != "success" ] && ALL_OK=false
-          COLOR=3066993   # verde
+          COLOR=3066993   # verde padrão
           TITLE_EMOJI="✅"
-          $ALL_OK || { COLOR=15158332; TITLE_EMOJI="⚠️"; }  # vermelho se houver falha
 
-          # Badges de status
+          # Qualidade: 3 níveis
+          if [ "$QUALITY_STATUS" = "error" ] || [ "$QUALITY_RESULT" = "failure" ]; then
+            Q="❌ erros encontrados"
+            COLOR=15158332; TITLE_EMOJI="❌"
+          elif [ "$QUALITY_STATUS" = "warning" ]; then
+            Q="⚠️ avisos encontrados"
+            [ "$COLOR" = "3066993" ] && COLOR=16776960 && TITLE_EMOJI="⚠️"  # amarelo
+          else
+            Q="✅ aprovado"
+          fi
+
           badge(){ [ "$1" = "success" ] && echo "✅ passou" || echo "❌ falhou"; }
-          Q=$(badge "$QUALITY_RESULT")
           S=$(badge "$SECURITY_RESULT")
           SEC=$(badge "$SECRETS_RESULT")
+          [ "$SECURITY_RESULT" != "success" ] && { COLOR=15158332; TITLE_EMOJI="❌"; }
+          [ "$SECRETS_RESULT"  != "success" ] && { COLOR=15158332; TITLE_EMOJI="❌"; }
 
           # Resumo da IA (primeiras 800 chars para não estourar limite Discord)
           AI_SHORT=$(echo "$AI_SUMMARY" | head -c 800)
