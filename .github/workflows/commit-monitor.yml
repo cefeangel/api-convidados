@@ -131,6 +131,7 @@ jobs:
           echo "| Swift (iOS) | $HAS_SWIFT |"            >> $GITHUB_STEP_SUMMARY
 
       # ── JavaScript / TypeScript / HTML / CSS ──
+      # Regras embutidas — não precisa de arquivo de config no projeto
       - name: Setup Node.js
         if: steps.detect-lang.outputs.has_js == 'true' || steps.detect-lang.outputs.has_html == 'true' || steps.detect-lang.outputs.has_css == 'true'
         uses: actions/setup-node@v4
@@ -140,44 +141,103 @@ jobs:
       - name: Instalar ferramentas JS/HTML/CSS
         if: steps.detect-lang.outputs.has_js == 'true' || steps.detect-lang.outputs.has_html == 'true' || steps.detect-lang.outputs.has_css == 'true'
         run: |
-          npm install -g htmlhint stylelint stylelint-config-standard 2>/dev/null || true
+          npm install -g htmlhint stylelint stylelint-config-standard eslint 2>/dev/null || true
           [ -f "package.json" ] && (npm ci --prefer-offline 2>/dev/null || npm install) || true
 
-      - name: ESLint — JavaScript / TypeScript
+      - name: ESLint — JavaScript / TypeScript (regras embutidas)
         if: steps.detect-lang.outputs.has_js == 'true'
         continue-on-error: true
         run: |
           echo "### 🔍 ESLint — JavaScript / TypeScript" >> $GITHUB_STEP_SUMMARY
+
+          # Cria config temporária com regras completas (não modifica o projeto)
+          cat > /tmp/.eslintrc-ci.json << 'ESLINT_EOF'
+          {
+            "env": { "node": true, "browser": true, "es2022": true, "commonjs": true },
+            "parserOptions": { "ecmaVersion": 2022 },
+            "rules": {
+              "no-undef": "error",
+              "no-unused-vars": "warn",
+              "no-redeclare": "error",
+              "no-unreachable": "error",
+              "no-duplicate-case": "error",
+              "no-constant-condition": "error",
+              "no-eval": "error",
+              "no-implied-eval": "error",
+              "no-new-func": "error",
+              "eqeqeq": ["error", "always"],
+              "no-var": "error",
+              "prefer-const": "warn",
+              "use-isnan": "error",
+              "no-empty": "warn",
+              "curly": ["warn", "all"],
+              "semi": ["warn", "always"]
+            },
+            "ignorePatterns": ["node_modules/", "dist/", "build/", "vendor/", "*.min.js"]
+          }
+          ESLINT_EOF
+
+          # Usa config do projeto se existir, senão usa a embutida
           if ls .eslintrc* eslint.config* 2>/dev/null | grep -q .; then
-            npx eslint . --ext .js,.ts,.jsx,.tsx --format=compact 2>&1 | tail -20 >> $GITHUB_STEP_SUMMARY || true
+            echo "📋 Usando configuração ESLint do projeto" >> $GITHUB_STEP_SUMMARY
+            npx eslint . --ext .js,.ts,.jsx,.tsx --format=compact 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
           else
-            echo "⚠️ Sem config ESLint — verificação básica de sintaxe:" >> $GITHUB_STEP_SUMMARY
-            find . -not -path "*/node_modules/*" -not -path "*/.github/*" \
-              \( -name "*.js" -o -name "*.ts" \) -maxdepth 5 | head -20 | \
-              xargs -I{} node --check {} 2>&1 | grep -v "^$" >> $GITHUB_STEP_SUMMARY || true
+            echo "📋 Usando regras embutidas (sem .eslintrc no projeto)" >> $GITHUB_STEP_SUMMARY
+            npx eslint . --ext .js,.ts,.jsx,.tsx --format=compact --no-eslintrc -c /tmp/.eslintrc-ci.json 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
           fi
 
-      - name: HTMLHint — HTML
+      - name: HTMLHint — HTML (regras embutidas)
         if: steps.detect-lang.outputs.has_html == 'true'
         continue-on-error: true
         run: |
           echo "### 🌐 HTMLHint — HTML" >> $GITHUB_STEP_SUMMARY
+
+          # Config embutida completa para HTMLHint
+          cat > /tmp/.htmlhintrc-ci.json << 'HTML_EOF'
+          {
+            "tagname-lowercase": true,
+            "attr-lowercase": true,
+            "attr-value-double-quotes": true,
+            "attr-no-duplication": true,
+            "doctype-first": true,
+            "tag-pair": true,
+            "spec-char-escape": true,
+            "id-unique": true,
+            "src-not-empty": true,
+            "alt-require": true,
+            "doctype-html5": true,
+            "attr-unsafe-chars": true
+          }
+          HTML_EOF
+
+          CONFIG_FLAG="--config /tmp/.htmlhintrc-ci.json"
+          ls .htmlhintrc .htmlhint.js 2>/dev/null | grep -q . && CONFIG_FLAG=""
+
           find . -not -path "*/node_modules/*" -not -path "*/.github/*" -not -path "*/vendor/*" \
             \( -name "*.html" -o -name "*.htm" \) -maxdepth 5 | \
-            xargs htmlhint 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+            xargs htmlhint $CONFIG_FLAG 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
 
-      - name: Stylelint — CSS / SCSS
+      - name: Stylelint — CSS / SCSS (regras embutidas)
         if: steps.detect-lang.outputs.has_css == 'true'
         continue-on-error: true
         run: |
           echo "### 🎨 Stylelint — CSS / SCSS" >> $GITHUB_STEP_SUMMARY
-          CONFIG=""
-          ls .stylelintrc* stylelint.config* 2>/dev/null | grep -q . || CONFIG="--config={\"extends\":[\"stylelint-config-standard\"]}"
-          find . -not -path "*/node_modules/*" -not -path "*/.github/*" \
-            \( -name "*.css" -o -name "*.scss" -o -name "*.sass" \) -maxdepth 5 | \
-            xargs npx stylelint $CONFIG 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+
+          # Usa config do projeto se existir, senão usa stylelint-config-standard embutido
+          if ls .stylelintrc* stylelint.config* 2>/dev/null | grep -q .; then
+            echo "📋 Usando configuração Stylelint do projeto" >> $GITHUB_STEP_SUMMARY
+            find . -not -path "*/node_modules/*" -not -path "*/.github/*" \
+              \( -name "*.css" -o -name "*.scss" -o -name "*.sass" \) -maxdepth 5 | \
+              xargs npx stylelint 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+          else
+            echo "📋 Usando stylelint-config-standard embutido" >> $GITHUB_STEP_SUMMARY
+            find . -not -path "*/node_modules/*" -not -path "*/.github/*" \
+              \( -name "*.css" -o -name "*.scss" -o -name "*.sass" \) -maxdepth 5 | \
+              xargs npx stylelint --config '{"extends":["stylelint-config-standard"]}' 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+          fi
 
       # ── PHP ──────────────────────────────────
+      # Regras PSR-12 embutidas — não precisa de phpcs.xml no projeto
       - name: Setup PHP
         if: steps.detect-lang.outputs.has_php == 'true'
         uses: shivammathur/setup-php@v2
@@ -185,20 +245,37 @@ jobs:
           php-version: '8.2'
           tools: phpcs, phpstan
 
-      - name: PHP_CodeSniffer — PHP
+      - name: PHP_CodeSniffer — PHP (regras embutidas)
         if: steps.detect-lang.outputs.has_php == 'true'
         continue-on-error: true
         run: |
           echo "### 🐘 PHP_CodeSniffer — PHP" >> $GITHUB_STEP_SUMMARY
-          phpcs --standard=PSR12 --extensions=php --ignore=vendor/ . 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
 
-      - name: PHPStan — Análise Estática PHP
+          # Usa phpcs.xml do projeto se existir, senão PSR12 embutido
+          if [ -f "phpcs.xml" ] || [ -f ".phpcs.xml" ]; then
+            echo "📋 Usando phpcs.xml do projeto" >> $GITHUB_STEP_SUMMARY
+            phpcs --extensions=php --ignore=vendor/ . 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+          else
+            echo "📋 Usando padrão PSR-12 embutido" >> $GITHUB_STEP_SUMMARY
+            phpcs --standard=PSR12 --extensions=php --ignore=vendor/ \
+              --runtime-set ignore_warnings_on_exit 1 . 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+          fi
+
+      - name: PHPStan — Análise Estática PHP (regras embutidas)
         if: steps.detect-lang.outputs.has_php == 'true'
         continue-on-error: true
         run: |
           echo "### 🔬 PHPStan — PHP" >> $GITHUB_STEP_SUMMARY
           find . -name "*.php" -not -path "*/vendor/*" -maxdepth 5 > /tmp/php_files.txt
-          head -20 /tmp/php_files.txt | xargs phpstan analyse --level=5 --no-progress 2>&1 | tail -20 >> $GITHUB_STEP_SUMMARY || true
+
+          # Usa phpstan.neon do projeto se existir, senão nível 5 embutido
+          if [ -f "phpstan.neon" ] || [ -f "phpstan.neon.dist" ]; then
+            echo "📋 Usando phpstan.neon do projeto" >> $GITHUB_STEP_SUMMARY
+            head -20 /tmp/php_files.txt | xargs phpstan analyse --no-progress 2>&1 | tail -20 >> $GITHUB_STEP_SUMMARY || true
+          else
+            echo "📋 Usando nível 5 embutido" >> $GITHUB_STEP_SUMMARY
+            head -20 /tmp/php_files.txt | xargs phpstan analyse --level=5 --no-progress 2>&1 | tail -20 >> $GITHUB_STEP_SUMMARY || true
+          fi
 
       # ── Python ───────────────────────────────
       - name: Setup Python
