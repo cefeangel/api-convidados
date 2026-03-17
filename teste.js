@@ -1,4 +1,1 @@
-const a d = 0;
-###
-%%%%%s
-git 
+const a = 0;
