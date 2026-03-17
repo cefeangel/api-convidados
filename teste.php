@@ -1,4 +1,3 @@
 <?php
-$nome = "jose"
-fsds
+$nome = "jose";
 ?>
