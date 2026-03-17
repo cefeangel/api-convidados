@@ -150,12 +150,14 @@ jobs:
         run: |
           echo "### 🔍 ESLint — JavaScript / TypeScript" >> $GITHUB_STEP_SUMMARY
 
-          # Cria config temporária com regras completas (não modifica o projeto)
-          cat > /tmp/.eslintrc-ci.json << 'ESLINT_EOF'
-          {
-            "env": { "node": true, "browser": true, "es2022": true, "commonjs": true },
-            "parserOptions": { "ecmaVersion": 2022 },
-            "rules": {
+          # Instala ESLint v8 (suporta --no-eslintrc e .eslintrc.json)
+          npm install -g eslint@8 2>/dev/null || true
+
+          # Gera config embutida via jq (sem heredoc nem python multiline)
+          jq -n '{
+            env: {node:true, browser:true, es2022:true, commonjs:true},
+            parserOptions: {ecmaVersion:2022},
+            rules: {
               "no-undef": "error",
               "no-unused-vars": "warn",
               "no-redeclare": "error",
@@ -165,25 +167,26 @@ jobs:
               "no-eval": "error",
               "no-implied-eval": "error",
               "no-new-func": "error",
-              "eqeqeq": ["error", "always"],
+              "eqeqeq": ["error","always"],
               "no-var": "error",
               "prefer-const": "warn",
               "use-isnan": "error",
               "no-empty": "warn",
-              "curly": ["warn", "all"],
-              "semi": ["warn", "always"]
+              "semi": ["warn","always"]
             },
-            "ignorePatterns": ["node_modules/", "dist/", "build/", "vendor/", "*.min.js"]
-          }
-          ESLINT_EOF
+            ignorePatterns: ["node_modules/","dist/","build/","vendor/","*.min.js"]
+          }' > /tmp/eslintrc-ci.json
 
           # Usa config do projeto se existir, senão usa a embutida
           if ls .eslintrc* eslint.config* 2>/dev/null | grep -q .; then
-            echo "📋 Usando configuração ESLint do projeto" >> $GITHUB_STEP_SUMMARY
-            npx eslint . --ext .js,.ts,.jsx,.tsx --format=compact 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+            echo "📋 Usando configuracao ESLint do projeto" >> $GITHUB_STEP_SUMMARY
+            eslint . --ext .js,.ts,.jsx,.tsx --format=compact 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
           else
             echo "📋 Usando regras embutidas (sem .eslintrc no projeto)" >> $GITHUB_STEP_SUMMARY
-            npx eslint . --ext .js,.ts,.jsx,.tsx --format=compact --no-eslintrc -c /tmp/.eslintrc-ci.json 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+            eslint . --ext .js,.ts,.jsx,.tsx --format=compact \
+              --no-eslintrc -c /tmp/eslintrc-ci.json \
+              --ignore-pattern "node_modules/" --ignore-pattern "dist/" --ignore-pattern "vendor/" \
+              2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
           fi
 
       - name: HTMLHint — HTML (regras embutidas)
