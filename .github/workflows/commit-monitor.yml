@@ -210,53 +210,50 @@ jobs:
         continue-on-error: true
         run: |
           echo "### 🌐 HTMLHint — HTML" >> $GITHUB_STEP_SUMMARY
-
-          # Config embutida completa para HTMLHint
-          cat > /tmp/.htmlhintrc-ci.json << 'HTML_EOF'
-          {
-            "tagname-lowercase": true,
-            "attr-lowercase": true,
-            "attr-value-double-quotes": true,
-            "attr-no-duplication": true,
-            "doctype-first": true,
-            "tag-pair": true,
-            "spec-char-escape": true,
-            "id-unique": true,
-            "src-not-empty": true,
-            "alt-require": true,
-            "doctype-html5": true,
-            "attr-unsafe-chars": true
-          }
-          HTML_EOF
-
-          CONFIG_FLAG="--config /tmp/.htmlhintrc-ci.json"
+          jq -n '{
+            "tagname-lowercase":true,"attr-lowercase":true,"attr-value-double-quotes":true,
+            "attr-no-duplication":true,"doctype-first":true,"tag-pair":true,
+            "spec-char-escape":true,"id-unique":true,"src-not-empty":true,
+            "alt-require":true,"doctype-html5":true,"attr-unsafe-chars":true
+          }' > /tmp/htmlhintrc-ci.json
+          CONFIG_FLAG="--config /tmp/htmlhintrc-ci.json"
           ls .htmlhintrc .htmlhint.js 2>/dev/null | grep -q . && CONFIG_FLAG=""
-
-          find . -not -path "*/node_modules/*" -not -path "*/.github/*" -not -path "*/vendor/*" \
+          HTML_OUT=$(find . -not -path "*/node_modules/*" -not -path "*/.github/*" -not -path "*/vendor/*" \
             \( -name "*.html" -o -name "*.htm" \) -maxdepth 5 | \
-            xargs htmlhint $CONFIG_FLAG 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+            xargs htmlhint $CONFIG_FLAG 2>&1) || true
+          echo "$HTML_OUT" | tail -30 >> $GITHUB_STEP_SUMMARY
+          HTML_ERRORS=$(echo "$HTML_OUT" | grep -c "error\|Error" || echo "0")
+          if [ "$HTML_ERRORS" -gt 0 ] 2>/dev/null; then
+            echo "❌ **$HTML_ERRORS erro(s) HTML** encontrado(s)" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_error=true" >> $GITHUB_ENV
+          else
+            echo "✅ HTML sem erros" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Stylelint — CSS / SCSS (regras embutidas)
         if: steps.detect-lang.outputs.has_css == 'true'
         continue-on-error: true
         run: |
           echo "### 🎨 Stylelint — CSS / SCSS" >> $GITHUB_STEP_SUMMARY
-
-          # Usa config do projeto se existir, senão usa stylelint-config-standard embutido
           if ls .stylelintrc* stylelint.config* 2>/dev/null | grep -q .; then
-            echo "📋 Usando configuração Stylelint do projeto" >> $GITHUB_STEP_SUMMARY
-            find . -not -path "*/node_modules/*" -not -path "*/.github/*" \
+            CSS_OUT=$(find . -not -path "*/node_modules/*" -not -path "*/.github/*" \
               \( -name "*.css" -o -name "*.scss" -o -name "*.sass" \) -maxdepth 5 | \
-              xargs npx stylelint 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+              xargs npx stylelint 2>&1) || true
           else
-            echo "📋 Usando stylelint-config-standard embutido" >> $GITHUB_STEP_SUMMARY
-            find . -not -path "*/node_modules/*" -not -path "*/.github/*" \
+            CSS_OUT=$(find . -not -path "*/node_modules/*" -not -path "*/.github/*" \
               \( -name "*.css" -o -name "*.scss" -o -name "*.sass" \) -maxdepth 5 | \
-              xargs npx stylelint --config '{"extends":["stylelint-config-standard"]}' 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+              xargs npx stylelint --config '{"extends":["stylelint-config-standard"]}' 2>&1) || true
+          fi
+          echo "$CSS_OUT" | tail -30 >> $GITHUB_STEP_SUMMARY
+          CSS_ERRORS=$(echo "$CSS_OUT" | grep -c "✖\|error" || echo "0")
+          if [ "$CSS_ERRORS" -gt 0 ] 2>/dev/null; then
+            echo "❌ **$CSS_ERRORS erro(s) CSS** encontrado(s)" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_error=true" >> $GITHUB_ENV
+          else
+            echo "✅ CSS sem erros" >> $GITHUB_STEP_SUMMARY
           fi
 
       # ── PHP ──────────────────────────────────
-      # Regras PSR-12 embutidas — não precisa de phpcs.xml no projeto
       - name: Setup PHP
         if: steps.detect-lang.outputs.has_php == 'true'
         uses: shivammathur/setup-php@v2
@@ -269,15 +266,18 @@ jobs:
         continue-on-error: true
         run: |
           echo "### 🐘 PHP_CodeSniffer — PHP" >> $GITHUB_STEP_SUMMARY
-
-          # Usa phpcs.xml do projeto se existir, senão PSR12 embutido
           if [ -f "phpcs.xml" ] || [ -f ".phpcs.xml" ]; then
-            echo "📋 Usando phpcs.xml do projeto" >> $GITHUB_STEP_SUMMARY
-            phpcs --extensions=php --ignore=vendor/ . 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+            PHPCS_OUT=$(phpcs --extensions=php --ignore=vendor/ . 2>&1) || true
           else
-            echo "📋 Usando padrão PSR-12 embutido" >> $GITHUB_STEP_SUMMARY
-            phpcs --standard=PSR12 --extensions=php --ignore=vendor/ \
-              --runtime-set ignore_warnings_on_exit 1 . 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+            PHPCS_OUT=$(phpcs --standard=PSR12 --extensions=php --ignore=vendor/ . 2>&1) || true
+          fi
+          echo "$PHPCS_OUT" | tail -30 >> $GITHUB_STEP_SUMMARY
+          PHPCS_ERRORS=$(echo "$PHPCS_OUT" | grep -c "| ERROR |\|FOUND.*ERROR" || echo "0")
+          if [ "$PHPCS_ERRORS" -gt 0 ] 2>/dev/null; then
+            echo "❌ **$PHPCS_ERRORS erro(s) PHP** encontrado(s) — padrão PSR-12 violado" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_error=true" >> $GITHUB_ENV
+          else
+            echo "✅ PHP sem erros PSR-12" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: PHPStan — Análise Estática PHP (regras embutidas)
@@ -286,14 +286,18 @@ jobs:
         run: |
           echo "### 🔬 PHPStan — PHP" >> $GITHUB_STEP_SUMMARY
           find . -name "*.php" -not -path "*/vendor/*" -maxdepth 5 > /tmp/php_files.txt
-
-          # Usa phpstan.neon do projeto se existir, senão nível 5 embutido
           if [ -f "phpstan.neon" ] || [ -f "phpstan.neon.dist" ]; then
-            echo "📋 Usando phpstan.neon do projeto" >> $GITHUB_STEP_SUMMARY
-            head -20 /tmp/php_files.txt | xargs phpstan analyse --no-progress 2>&1 | tail -20 >> $GITHUB_STEP_SUMMARY || true
+            STAN_OUT=$(head -20 /tmp/php_files.txt | xargs phpstan analyse --no-progress 2>&1) || true
           else
-            echo "📋 Usando nível 5 embutido" >> $GITHUB_STEP_SUMMARY
-            head -20 /tmp/php_files.txt | xargs phpstan analyse --level=5 --no-progress 2>&1 | tail -20 >> $GITHUB_STEP_SUMMARY || true
+            STAN_OUT=$(head -20 /tmp/php_files.txt | xargs phpstan analyse --level=5 --no-progress 2>&1) || true
+          fi
+          echo "$STAN_OUT" | tail -20 >> $GITHUB_STEP_SUMMARY
+          STAN_ERRORS=$(echo "$STAN_OUT" | grep -c "Found [^0].*error" || echo "0")
+          if [ "$STAN_ERRORS" -gt 0 ] 2>/dev/null; then
+            echo "❌ PHPStan encontrou erros" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_error=true" >> $GITHUB_ENV
+          else
+            echo "✅ PHPStan sem erros" >> $GITHUB_STEP_SUMMARY
           fi
 
       # ── Python ───────────────────────────────
@@ -309,9 +313,15 @@ jobs:
         run: |
           pip install flake8 black --quiet
           echo "### 🐍 Flake8 — Python" >> $GITHUB_STEP_SUMMARY
-          flake8 . --max-line-length=120 --statistics 2>&1 | tail -20 >> $GITHUB_STEP_SUMMARY || true
-          echo "### 🎨 Black — Formatação Python" >> $GITHUB_STEP_SUMMARY
-          black --check --diff . 2>&1 | tail -10 >> $GITHUB_STEP_SUMMARY || true
+          FLAKE_OUT=$(flake8 . --max-line-length=120 --statistics 2>&1) || true
+          echo "$FLAKE_OUT" | tail -20 >> $GITHUB_STEP_SUMMARY
+          FLAKE_ERRORS=$(echo "$FLAKE_OUT" | grep -c " E[0-9]" || echo "0")
+          if [ "$FLAKE_ERRORS" -gt 0 ] 2>/dev/null; then
+            echo "❌ **$FLAKE_ERRORS erro(s) Python** encontrado(s)" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_error=true" >> $GITHUB_ENV
+          else
+            echo "✅ Python sem erros" >> $GITHUB_STEP_SUMMARY
+          fi
 
       # ── Go ───────────────────────────────────
       - name: Setup Go
@@ -325,8 +335,14 @@ jobs:
         continue-on-error: true
         run: |
           echo "### 🐹 Go Vet" >> $GITHUB_STEP_SUMMARY
-          go vet ./... 2>&1 >> $GITHUB_STEP_SUMMARY || true
-
+          GO_OUT=$(go vet ./... 2>&1) || true
+          echo "$GO_OUT" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$GO_OUT" ]; then
+            echo "❌ Go vet encontrou problemas" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_error=true" >> $GITHUB_ENV
+          else
+            echo "✅ Go sem erros" >> $GITHUB_STEP_SUMMARY
+          fi
 
       # ── Kotlin (Android) ─────────────────────
       - name: Setup Java para Kotlin
@@ -343,12 +359,18 @@ jobs:
           echo "### 🤖 ktlint — Kotlin / Android" >> $GITHUB_STEP_SUMMARY
           curl -sSLO https://github.com/pinterest/ktlint/releases/latest/download/ktlint
           chmod +x ktlint
-          ./ktlint --relative --reporter=plain "**/*.kt" "**/*.kts" 2>&1 | \
-            grep -v "^$" | head -40 >> $GITHUB_STEP_SUMMARY || true
+          KT_OUT=$(./ktlint --relative --reporter=plain "**/*.kt" "**/*.kts" 2>&1) || true
+          echo "$KT_OUT" | grep -v "^$" | head -40 >> $GITHUB_STEP_SUMMARY
           rm -f ktlint
+          KT_ERRORS=$(echo "$KT_OUT" | grep -c ":\|error" || echo "0")
+          if [ "$KT_ERRORS" -gt 0 ] 2>/dev/null; then
+            echo "❌ **$KT_ERRORS problema(s) Kotlin** encontrado(s)" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_error=true" >> $GITHUB_ENV
+          else
+            echo "✅ Kotlin sem erros" >> $GITHUB_STEP_SUMMARY
+          fi
 
-      # ── Swift (iOS) ───────────────────────────
-      # SwiftLint exige runner macOS — roda como job separado (ver abaixo)
+      # ── Swift (iOS) — job separado macos-latest ──
       - name: Swift — Verificacao basica
         if: steps.detect-lang.outputs.has_swift == 'true'
         continue-on-error: true
@@ -356,18 +378,22 @@ jobs:
           echo "### 🍎 Swift / iOS — Verificacao" >> $GITHUB_STEP_SUMMARY
           SWIFT_FILES=$(find . -name "*.swift" -not -path "*/.github/*" -not -path "*/build/*" | wc -l)
           echo "Arquivos Swift encontrados: **$SWIFT_FILES**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "Analise completa com SwiftLint disponivel no job **swiftlint** (runner macOS)." >> $GITHUB_STEP_SUMMARY
           git diff --name-only HEAD~1 HEAD 2>/dev/null | grep "\.swift$" | \
             awk '{print "- " $0}' >> $GITHUB_STEP_SUMMARY || true
 
-      # ── Checagens Genéricas ──────────────────
-      - name: Verificar resultado do ESLint
-        if: steps.detect-lang.outputs.has_js == 'true'
+      # ── Verificação final — falha o job se QUALQUER linguagem tiver erros ──
+      - name: Resultado final da qualidade de código
+        if: always()
         run: |
           if [ "$has_lint_error" = "true" ]; then
-            echo "❌ ESLint encontrou erros de sintaxe ou qualidade — job falhará" >> $GITHUB_STEP_SUMMARY
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            echo "## ❌ Qualidade de Código — REPROVADA" >> $GITHUB_STEP_SUMMARY
+            echo "Erros encontrados em um ou mais arquivos. Corrija antes de fazer merge." >> $GITHUB_STEP_SUMMARY
             exit 1
+          else
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            echo "## ✅ Qualidade de Código — APROVADA" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Verificar Arquivos de Configuração Sensíveis
