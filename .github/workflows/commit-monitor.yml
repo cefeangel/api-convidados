@@ -180,13 +180,29 @@ jobs:
           # Usa config do projeto se existir, senão usa a embutida
           if ls .eslintrc* eslint.config* 2>/dev/null | grep -q .; then
             echo "📋 Usando configuracao ESLint do projeto" >> $GITHUB_STEP_SUMMARY
-            eslint . --ext .js,.ts,.jsx,.tsx --format=compact 2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+            ESLINT_OUT=$(eslint . --ext .js,.ts,.jsx,.tsx --format=compact 2>&1) || true
           else
             echo "📋 Usando regras embutidas (sem .eslintrc no projeto)" >> $GITHUB_STEP_SUMMARY
-            eslint . --ext .js,.ts,.jsx,.tsx --format=compact \
+            ESLINT_OUT=$(eslint . --ext .js,.ts,.jsx,.tsx --format=compact \
               --no-eslintrc -c /tmp/eslintrc-ci.json \
               --ignore-pattern "node_modules/" --ignore-pattern "dist/" --ignore-pattern "vendor/" \
-              2>&1 | tail -30 >> $GITHUB_STEP_SUMMARY || true
+              2>&1) || true
+          fi
+
+          echo "$ESLINT_OUT" | tail -30 >> $GITHUB_STEP_SUMMARY
+
+          # Conta erros reais (não warnings)
+          ERRORS=$(echo "$ESLINT_OUT" | grep -c " Error - " || echo "0")
+          WARNINGS=$(echo "$ESLINT_OUT" | grep -c " Warning - " || echo "0")
+          PROBLEMS=$(echo "$ESLINT_OUT" | grep -oP '\d+(?= problem)' | head -1 || echo "0")
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$ERRORS" -gt 0 ] 2>/dev/null; then
+            echo "❌ **$ERRORS erro(s) encontrado(s)** — qualidade de código reprovada" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_error=true" >> $GITHUB_ENV
+          else
+            echo "✅ Nenhum erro de sintaxe. Warnings: $WARNINGS" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_error=false" >> $GITHUB_ENV
           fi
 
       - name: HTMLHint — HTML (regras embutidas)
@@ -346,6 +362,14 @@ jobs:
             awk '{print "- " $0}' >> $GITHUB_STEP_SUMMARY || true
 
       # ── Checagens Genéricas ──────────────────
+      - name: Verificar resultado do ESLint
+        if: steps.detect-lang.outputs.has_js == 'true'
+        run: |
+          if [ "$has_lint_error" = "true" ]; then
+            echo "❌ ESLint encontrou erros de sintaxe ou qualidade — job falhará" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
       - name: Verificar Arquivos de Configuração Sensíveis
         run: |
           echo "### 🔒 Verificação de Arquivos Sensíveis" >> $GITHUB_STEP_SUMMARY
