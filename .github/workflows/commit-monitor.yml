@@ -198,11 +198,13 @@ jobs:
 
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ "$ERRORS" -gt 0 ] 2>/dev/null; then
-            echo "❌ **$ERRORS erro(s) encontrado(s)** — qualidade de código reprovada" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **$ERRORS erro(s)** e **$WARNINGS aviso(s)** encontrado(s)" >> $GITHUB_STEP_SUMMARY
             echo "has_lint_error=true" >> $GITHUB_ENV
+          elif [ "$WARNINGS" -gt 0 ] 2>/dev/null; then
+            echo "⚠️ **$WARNINGS aviso(s)** encontrado(s) — revisar recomendado" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_warning=true" >> $GITHUB_ENV
           else
-            echo "✅ Nenhum erro de sintaxe. Warnings: $WARNINGS" >> $GITHUB_STEP_SUMMARY
-            echo "has_lint_error=false" >> $GITHUB_ENV
+            echo "✅ JavaScript sem erros ou avisos" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: HTMLHint — HTML (regras embutidas)
@@ -223,9 +225,13 @@ jobs:
             xargs htmlhint $CONFIG_FLAG 2>&1) || true
           echo "$HTML_OUT" | tail -30 >> $GITHUB_STEP_SUMMARY
           HTML_ERRORS=$(echo "$HTML_OUT" | grep -c "error\|Error" || echo "0")
+          HTML_WARNS=$(echo "$HTML_OUT" | grep -c "warning\|Warning" || echo "0")
           if [ "$HTML_ERRORS" -gt 0 ] 2>/dev/null; then
             echo "❌ **$HTML_ERRORS erro(s) HTML** encontrado(s)" >> $GITHUB_STEP_SUMMARY
             echo "has_lint_error=true" >> $GITHUB_ENV
+          elif [ "$HTML_WARNS" -gt 0 ] 2>/dev/null; then
+            echo "⚠️ **$HTML_WARNS aviso(s) HTML** encontrado(s)" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_warning=true" >> $GITHUB_ENV
           else
             echo "✅ HTML sem erros" >> $GITHUB_STEP_SUMMARY
           fi
@@ -246,9 +252,13 @@ jobs:
           fi
           echo "$CSS_OUT" | tail -30 >> $GITHUB_STEP_SUMMARY
           CSS_ERRORS=$(echo "$CSS_OUT" | grep -c "✖\|error" || echo "0")
+          CSS_WARNS=$(echo "$CSS_OUT" | grep -c "warning\|⚠" || echo "0")
           if [ "$CSS_ERRORS" -gt 0 ] 2>/dev/null; then
             echo "❌ **$CSS_ERRORS erro(s) CSS** encontrado(s)" >> $GITHUB_STEP_SUMMARY
             echo "has_lint_error=true" >> $GITHUB_ENV
+          elif [ "$CSS_WARNS" -gt 0 ] 2>/dev/null; then
+            echo "⚠️ **$CSS_WARNS aviso(s) CSS** encontrado(s)" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_warning=true" >> $GITHUB_ENV
           else
             echo "✅ CSS sem erros" >> $GITHUB_STEP_SUMMARY
           fi
@@ -272,10 +282,14 @@ jobs:
             PHPCS_OUT=$(phpcs --standard=PSR12 --extensions=php --ignore=vendor/ . 2>&1) || true
           fi
           echo "$PHPCS_OUT" | tail -30 >> $GITHUB_STEP_SUMMARY
-          PHPCS_ERRORS=$(echo "$PHPCS_OUT" | grep -c "| ERROR |\|FOUND.*ERROR" || echo "0")
+          PHPCS_ERRORS=$(echo "$PHPCS_OUT" | grep -cE "\| ERROR \||FOUND [^0][0-9]* ERROR" || echo "0")
+          PHPCS_WARNS=$(echo "$PHPCS_OUT" | grep -cE "\| WARNING \||FOUND [^0][0-9]* WARNING" || echo "0")
           if [ "$PHPCS_ERRORS" -gt 0 ] 2>/dev/null; then
             echo "❌ **$PHPCS_ERRORS erro(s) PHP** encontrado(s) — padrão PSR-12 violado" >> $GITHUB_STEP_SUMMARY
             echo "has_lint_error=true" >> $GITHUB_ENV
+          elif [ "$PHPCS_WARNS" -gt 0 ] 2>/dev/null; then
+            echo "⚠️ **$PHPCS_WARNS aviso(s) PHP** encontrado(s)" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_warning=true" >> $GITHUB_ENV
           else
             echo "✅ PHP sem erros PSR-12" >> $GITHUB_STEP_SUMMARY
           fi
@@ -316,9 +330,13 @@ jobs:
           FLAKE_OUT=$(flake8 . --max-line-length=120 --statistics 2>&1) || true
           echo "$FLAKE_OUT" | tail -20 >> $GITHUB_STEP_SUMMARY
           FLAKE_ERRORS=$(echo "$FLAKE_OUT" | grep -c " E[0-9]" || echo "0")
+          FLAKE_WARNS=$(echo "$FLAKE_OUT" | grep -c " W[0-9]" || echo "0")
           if [ "$FLAKE_ERRORS" -gt 0 ] 2>/dev/null; then
             echo "❌ **$FLAKE_ERRORS erro(s) Python** encontrado(s)" >> $GITHUB_STEP_SUMMARY
             echo "has_lint_error=true" >> $GITHUB_ENV
+          elif [ "$FLAKE_WARNS" -gt 0 ] 2>/dev/null; then
+            echo "⚠️ **$FLAKE_WARNS aviso(s) Python** encontrado(s)" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_warning=true" >> $GITHUB_ENV
           else
             echo "✅ Python sem erros" >> $GITHUB_STEP_SUMMARY
           fi
@@ -362,10 +380,14 @@ jobs:
           KT_OUT=$(./ktlint --relative --reporter=plain "**/*.kt" "**/*.kts" 2>&1) || true
           echo "$KT_OUT" | grep -v "^$" | head -40 >> $GITHUB_STEP_SUMMARY
           rm -f ktlint
-          KT_ERRORS=$(echo "$KT_OUT" | grep -c ":\|error" || echo "0")
+          KT_ERRORS=$(echo "$KT_OUT" | grep -c " error:" || echo "0")
+          KT_WARNS=$(echo "$KT_OUT" | grep -c " warning:\|ktlint" || echo "0")
           if [ "$KT_ERRORS" -gt 0 ] 2>/dev/null; then
-            echo "❌ **$KT_ERRORS problema(s) Kotlin** encontrado(s)" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **$KT_ERRORS erro(s) Kotlin** encontrado(s)" >> $GITHUB_STEP_SUMMARY
             echo "has_lint_error=true" >> $GITHUB_ENV
+          elif [ "$KT_WARNS" -gt 0 ] 2>/dev/null; then
+            echo "⚠️ **$KT_WARNS aviso(s) Kotlin** encontrado(s)" >> $GITHUB_STEP_SUMMARY
+            echo "has_lint_warning=true" >> $GITHUB_ENV
           else
             echo "✅ Kotlin sem erros" >> $GITHUB_STEP_SUMMARY
           fi
@@ -382,14 +404,19 @@ jobs:
           git diff --name-only HEAD~1 HEAD 2>/dev/null | grep "\.swift$" | \
             awk '{print "- " $0}' >> $GITHUB_STEP_SUMMARY || true
 
-      # ── Verificação final — falha o job se QUALQUER linguagem tiver erros ──
+      # ── Verificação final — falha o job se QUALQUER linguagem tiver erros ou warnings ──
       - name: Resultado final da qualidade de código
         if: always()
         run: |
           if [ "$has_lint_error" = "true" ]; then
             echo "---" >> $GITHUB_STEP_SUMMARY
             echo "## ❌ Qualidade de Código — REPROVADA" >> $GITHUB_STEP_SUMMARY
-            echo "Erros encontrados em um ou mais arquivos. Corrija antes de fazer merge." >> $GITHUB_STEP_SUMMARY
+            echo "Erros críticos encontrados. Corrija antes de fazer merge." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          elif [ "$has_lint_warning" = "true" ]; then
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            echo "## ⚠️ Qualidade de Código — AVISOS ENCONTRADOS" >> $GITHUB_STEP_SUMMARY
+            echo "Warnings detectados. Revise os itens acima." >> $GITHUB_STEP_SUMMARY
             exit 1
           else
             echo "---" >> $GITHUB_STEP_SUMMARY
