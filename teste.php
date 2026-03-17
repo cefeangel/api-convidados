@@ -1,5 +1,8 @@
 <?php
 
-$nome = "jose";
+/**
+ * Plugin Name: Meu Plugin
+ * Description: Exemplo
+ */
 
-?>
+echo "teste";
